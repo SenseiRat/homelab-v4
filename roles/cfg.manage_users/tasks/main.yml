@@ -1,0 +1,57 @@
+---
+# tasks file for cfg.manage_users
+
+- name: Add the admin user
+  become: true
+  ansible.builtin.user:
+    name: sean
+    comment: Sean
+    home: /home/sean
+    shell: /bin/bash
+    groups: sudo
+    append: true
+  register: admin_user
+
+- name: Set the admin user's password
+  become: true
+  ansible.builtin.user:
+    name: sean
+    password: "{{ admin_password | password_hash('sha512') }}"
+  when: admin_user.changed
+
+
+- name: Set the authorized keys for admin user
+  become: true
+  ansible.posix.authorized_key:
+    user: sean
+    state: present
+    key: "{{ lookup('file', '/home/sean/.ssh/id_rsa.pub') }}"
+  #local_action:
+  #  ansible.builtin.command: ssh -i /home/sean/.ssh/id_rsa sean@{{ ansible_default_ipv4["address"] }}
+
+- name: Add the ansible user
+  become: true
+  ansible.builtin.user:
+    name: ansible
+    comment: Ansible Service Account
+    system: true
+    home: /home/ansible
+    shell: /bin/bash
+    groups: sudo
+    append: true
+
+- name: Set the authorized keys for ansible user
+  become: true
+  ansible.posix.authorized_key:
+    user: ansible
+    state: present
+    key: "{{ lookup('file', '/home/sean/.ssh/ansible_id_rsa.pub') }}"
+  #local_action:
+  #  ansible.builtin.command: ssh -i /home/sean/.ssh/ansible_id_rsa ansible@{{ ansible_default_ipv4["address"] }}
+
+- name: Configure ansible user sudo permissions
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/sudoers.d/ansible-sudoers-rule
+    line: "ansible ALL=(ALL:ALL) NOPASSWD:ALL"
+    create: true

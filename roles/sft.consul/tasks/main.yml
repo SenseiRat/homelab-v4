@@ -1,0 +1,329 @@
+---
+# tasks file for sft.consul
+- name: Install Consul dependencies
+  become: true
+  ansible.builtin.apt:
+    pkg:
+      - curl
+      - gnupg
+      - rsync
+    state: latest
+
+- name: Add Hashicorp GPG key
+  become: true
+  ansible.builtin.get_url:
+    url: https://apt.releases.hashicorp.com/gpg
+    dest: /usr/share/keyrings/hashicorp.asc
+    mode: '0644'
+    force: true
+
+- name: Add Hashicorp repository
+  become: true
+  ansible.builtin.apt_repository:
+    repo: deb [arch=arm64 signed-by=/usr/share/keyrings/hashicorp.asc] https://apt.releases.hashicorp.com bookworm main
+    filename: hashicorp
+    state: present
+    update_cache: true
+
+- name: Install Consul
+  become: true
+  ansible.builtin.apt:
+    name: consul
+    state: latest
+
+- name: Create the consul certs directory
+  become: true
+  ansible.builtin.file:
+    path: /etc/consul.d/certs
+    state: directory
+    owner: consul
+    group: consul
+    mode: '0744'
+
+#- set_fact:
+#    consul_cert: /etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}.pem
+
+#- set_fact:
+#    consul_key: /etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}-key.pem
+
+- name: Configure Consul
+  become: true
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/consul.d/{{ item }}"
+    owner: consul
+    group: consul
+    mode: '0600'
+  loop:
+    - consul.hcl
+    - server.hcl
+
+- name: Generate the gossip encryption key
+  ansible.builtin.command: consul keygen
+  args:
+    creates: /opt/consul/serf/local.keyring
+  when: consul_leader == true
+  register: consul_encrypt_key
+
+- name: Set the gossip key  fact
+  ansible.builtin.set_fact:
+    gossip_key: "{{ consul_encrypt_key.stdout }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ play_hosts }}"
+  run_once: true
+
+- name: Add the encrypt key to the config file
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/consul.d/consul.hcl
+    regex: "^encrypt = .*"
+    line: "encrypt = \"{{ gossip_key }}\""
+
+- name: Create Consul certificate authority
+  become: true
+  ansible.builtin.command: consul tls ca create
+  args:
+    chdir: /etc/consul.d/certs
+    creates: consul-agent-ca.pem
+  when: consul_leader == true
+
+  # these loops run through number of consul servers +1 because they start at zero
+- name: Generate Consul certificates
+  become: true
+  ansible.builtin.command: "consul tls cert create -server -dc {{ consul_dc }} -domain {{ consul_domain }}"
+  args:
+    chdir: /etc/consul.d/certs
+    creates: "{{ consul_dc }}-server-consul-{{ item }}.pem"
+  when: consul_leader == true
+  loop: "{{ query('sequence', 'start=0 end=' + groups['consul'] | length | string) }}"
+
+- name: Set consul user as owner for certs
+  become: true
+  ansible.builtin.file:
+    dest: /etc/consul.d/certs
+    owner: consul
+    group: consul
+    recurse: true
+  when: consul_leader == true
+
+- name: Copy cert files to tmp
+  become: true
+  ansible.builtin.copy:
+    src: "/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ item }}.pem"
+    dest: /tmp
+    remote_src: true
+    owner: ansible
+    group: ansible
+  when: consul_leader == true
+  loop: "{{ query('sequence', 'start=0 end='+groups['consul'] | length | string) }}"
+
+- name: Copy key files to tmp
+  become: true
+  ansible.builtin.copy:
+    src: "/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ item }}-key.pem"
+    dest: /tmp
+    remote_src: true
+    owner: ansible
+    group: ansible
+  when: consul_leader == true
+  loop: "{{ query('sequence', 'start=0 end='+groups['consul'] | length | string) }}"
+  
+- name: Copy ca file to tmp
+  become: true
+  ansible.builtin.copy:
+    src: "/etc/consul.d/certs/consul-agent-ca.pem"
+    dest: /tmp
+    remote_src: true
+    owner: ansible
+    group: ansible
+  when: consul_leader == true
+
+- name: Store certs on control node
+  delegate_to: localhost
+  ansible.posix.synchronize:
+    src: /tmp/{{ consul_dc }}-server-consul-{{ item }}.pem
+    dest: /tmp/
+    mode: pull
+  when: consul_leader == true
+  loop: "{{ query('sequence', 'start=0 end='+groups['consul'] | length | string) }}"
+
+- name: Store keys on control node
+  delegate_to: localhost
+  ansible.posix.synchronize:
+    src: /tmp/{{ consul_dc }}-server-consul-{{ item }}-key.pem
+    dest: /tmp/
+    mode: pull
+  when: consul_leader == true
+  loop: "{{ query('sequence', 'start=0 end='+groups['consul'] | length | string) }}"
+
+- name: Store ca file on control node
+  delegate_to: localhost
+  ansible.posix.synchronize:
+    src: /tmp/consul-agent-ca.pem
+    dest: /tmp/
+    mode: pull
+  when: consul_leader == true
+
+- name: Transfer certs to all consul servers
+  become: true
+  ansible.builtin.copy:
+    src: /tmp/{{ consul_dc }}-server-consul-{{ consul_node_number }}.pem
+    dest: /etc/consul.d/certs/
+    owner: consul
+    group: consul
+  when: consul_leader == false
+  #loop: "{{ query('sequence', 'start=0 end='+groups['consul'] | length | string) }}"
+
+- name: Transfer keys to all consul servers
+  become: true
+  ansible.builtin.copy:
+    src: /tmp/{{ consul_dc }}-server-consul-{{ consul_node_number }}-key.pem
+    dest: /etc/consul.d/certs/
+    owner: consul
+    group: consul
+  when: consul_leader == false
+  #loop: "{{ query('sequence', 'start=0 end='+groups['consul'] | length | string) }}"
+
+- name: Transfer certs to all consul servers
+  become: true
+  ansible.builtin.copy:
+    src: /tmp/consul-agent-ca.pem
+    dest: /etc/consul.d/certs/
+    owner: consul
+    group: consul
+  when: consul_leader == false
+
+- name: Enable the Consul service
+  become: true
+  ansible.builtin.service:
+    name: consul
+    enabled: true
+
+- name: Start the consul service
+  become: true
+  ansible.builtin.service:
+    name: consul
+    state: started
+
+- name: Create the bootstrap token
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/consul
+      - acl
+      - bootstrap
+      - -format=json
+  when: consul_leader == true
+  register: bootstrap_token
+  tags:
+    - test
+
+- name: Set the bootstrap token as a fact
+  set_fact:
+    bs_token: "{{ bootstrap_token.stdout }}"
+  when: consul_leader == true
+  tags:
+    - test
+
+- debug:
+    var: {{ bs_token.SecretID }}
+
+- name: Pause until you can verify recording of bootstrap token
+  ansible.builtin.pause:
+    prompt: "Verify that the bootstrap token has been saved."
+
+- name: Set the bootstrap token for all hosts
+  ansible.builtin.set_fact:
+    bootstrap_ID: "{{ bs_token.SecretID }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ play_hosts }}"
+  run_once: true
+  tags:
+    - test
+
+- name: Copy the node policy to the host
+  become: true
+  ansible.builtin.copy:
+    src: node-policy.hcl
+    dest: /root/node-policy.hcl
+  when: consul_leader == true
+  register: node_policy
+
+- name: Create the node policy
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/consul
+      - acl
+      - policy
+      - create
+      - -token
+      - "{{ bootstrap_ID }}"
+      - -name
+      - node-policy
+      - -rules
+      - "@/root/node-policy.hcl"
+      - -ca-file=/etc/consul.d/certs/consul-agent-ca.pem
+      - -client-cert=/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}.pem
+      - -client-key=/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}-key.pem
+  when: consul_leader == true and node_policy is changed
+
+- name: Create the node token
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/consul
+      - acl
+      - token
+      - create
+      - -token
+      - "{{ bootstrap_ID }}"
+      - -description
+      - "node token"
+      - -policy-name
+      - node-policy
+      - -format=json
+      - -ca-file=/etc/consul.d/certs/consul-agent-ca.pem
+      - -client-cert=/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}.pem
+      - -client-key=/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}-key.pem
+  when: consul_leader == true
+  register: node_token
+  tags: 
+    - test
+
+- name: Set the node token as a fact
+  set_fact:
+    node_secret: "{{ node_token.stdout }}"
+  when: consul_leader == true
+  tags:
+    - test
+
+- debug:
+    var: {{ node_secret.SecretID }}
+
+- name: Pause until you can verify recording of node token
+  ansible.builtin.pause:
+    prompt: "Verify that the node token has been saved."
+
+- name: Set the node token for all hosts
+  ansible.builtin.set_fact:
+    node_ID: "{{ node_secret.SecretID }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ play_hosts }}"
+  run_once: true
+
+- name: Set the node token on all servers
+  become: true
+  ansible.builtin.command:
+    argv: 
+      - /usr/bin/consul
+      - acl
+      - set-agent-token
+      - -token={{ bootstrap_ID }}
+      - -ca-file=/etc/consul.d/certs/consul-agent-ca.pem
+      - -client-cert=/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}.pem
+      - -client-key=/etc/consul.d/certs/{{ consul_dc }}-server-consul-{{ consul_node_number }}-key.pem
+      - agent
+      - "{{ node_ID }}"
+  
+      

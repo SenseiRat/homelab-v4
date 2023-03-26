@@ -1,0 +1,127 @@
+# Still need Authelia deployed somewhere in here
+---
+- hosts: servers
+  gather_facts: false
+  tasks:
+    - name: Test connection
+      ansible.builtin.ping:
+
+- hosts: nomad
+  gather_facts: false
+  tasks:
+    - name: Deploy NFS storage controller
+      become: true
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/nfs-controller.nomad') }}"
+        timeout: 120
+        use_ssl: false
+        #client_cert: /root/global-client-nomad.pem 
+        #client_key: /root/global-client-nomad-key.pem
+      run_once: true
+      tags:
+        - nomad-nfs
+    
+    - name: Deploy NFS storage node
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/nfs-node.nomad') }}"
+        timeout: 120
+        use_ssl: false
+      run_once: true
+      tags:
+        - nomad-nfs
+
+    - name: Deploy Redis
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/redis.nomad') }}"
+        timeout: 120
+        use_ssl: false
+      run_once: true
+      tags: nomad-redis
+
+- hosts: vault
+  gather_facts: true
+  #max_fail_percentage: 99
+  tasks:
+    - name: Deploy Vault
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/vault.nomad') }}"
+        timeout: 120
+        use_ssl: false
+      run_once: true
+  
+    #- name: Wait for vault port to open on a host
+    #  ansible.builtin.wait_for:
+    #    host: "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}"
+    #    port: 8200
+    #    delay: 10
+    #    sleep: 10
+    #    state: present
+    #    timeout: 30
+
+- hosts: nomad
+  gather_facts: false
+  max_fail_percentage: 99
+  roles:
+    - ../roles/nmd.traefik
+    - ../roles/nmd.pihole
+    - ../roles/nmd.bitwarden
+    - ../roles/nmd.postgres
+    - ../roles/nmd.mariadb
+    #- ../roles/nmd.authelia    # incomplete; needs to be implemented after I start doing secrets in vault
+    - ../roles/nmd.gitea
+    - ../roles/nmd.mediawiki    # Currently set to use PGSQL and needs to be converted to MariaDB
+
+- hosts: nomad
+  gather_facts: false
+  tasks:
+    - name: Deploy PG Admin
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/pgadmin.nomad') }}"
+        timeout: 120
+        use_ssl: false
+      run_once: true
+
+    - name: Deploy Drone.io
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/drone.nomad') }}"
+        timeout: 120
+        use_ssl: false
+      run_once: true
+
+    - name: Deploy RabbitMQ
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/rabbitmq.nomad') }}"
+        timeout: 120
+        use_ssl: false
+      run_once: true
+
+    #- name: Deploy AWX
+    #  community.general.nomad_job:
+    #    host: localhost
+    #    state: present
+    #    content: "{{ lookup('ansible.builtin.file', '../nomad/awx.nomad') }}"
+    #    timeout: 120
+    #  run_once: true
+
+    - name: Deploy Watchtower
+      community.general.nomad_job:
+        host: localhost
+        state: present
+        content: "{{ lookup('ansible.builtin.file', '../nomad/watchtower.nomad') }}"
+        timeout: 120
+        use_ssl: false
+      run_once: true

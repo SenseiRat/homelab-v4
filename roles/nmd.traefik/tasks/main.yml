@@ -1,0 +1,57 @@
+---
+# tasks file for nmd.traefik
+- name: Check what volumes exist
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - status
+  run_once: true
+  register: volume_status
+
+- name: Ensure remote volumes directory exists
+  become: true
+  ansible.builtin.file:
+    path: /opt/nfs-volumes
+    state: directory
+  when: nomad_leader == true and not 'traefik-config' in volume_status.stdout
+  tags: nomad-traefik
+
+- name: Copy the traefik volume file to the remote machine
+  become: true
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /opt/nfs-volumes/
+    owner: root
+    group: root
+  run_once: true
+  when: nomad_leader == true and not 'traefik-config' in volume_status.stdout
+  loop:
+    - letsencrypt.volume
+    - traefik-config.volume
+  tags: nomad-traefik
+
+- name: Deploy the traefik volume
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - create
+      - /opt/nfs-volumes/{{ item }}
+  run_once: true
+  when: nomad_leader == true and not 'traefik-config' in volume_status.stdout
+  loop:
+    - letsencrypt.volume
+    - traefik-config.volume
+  tags: nomad-traefik
+
+- name: Deploy the traefik nomad job
+  community.general.nomad_job:
+    host: localhost
+    state: present
+    content: "{{ lookup('ansible.builtin.file', '../nomad/traefik.nomad') }}"
+    timeout: 120
+    use_ssl: false
+  run_once: true

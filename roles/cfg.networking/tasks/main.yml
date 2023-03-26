@@ -1,0 +1,57 @@
+---
+# tasks file for cfg.networking
+
+- name: Set static IP and disable IPv6
+  become: true
+  ansible.builtin.template:
+    src: ethernet_config.j2
+    dest: /etc/network/interfaces.d/eth0
+    owner: root
+    group: root
+    mode: '0600'
+  register: if_config
+
+# Incorrectly sets hostname to client IP address
+- name: Set hostname
+  become: true
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: Check if /etc/resolv.conf exists
+  become: true
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+  register: resolv_exist
+  
+- name: Ensure /etc/resolv exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    state: touch
+    owner: root
+    group: root
+    mode: '0644'
+  when: resolv_exist.stat.exists == 'false'
+
+- name: Clear out any default DNS servers
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    regex: "^nameserver .*"
+    state: absent
+  when: resolv_exist.stat.exists == 'false'
+
+- name: Set DNS servers
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    line: "nameserver {{ item }}"
+  loop: "{{ temp_dns_servers }}"
+  register: dns_config
+
+- name: Restart networking if required
+  become: true
+  ansible.builtin.service:
+    name: systemd-networkd.service
+    state: restarted
+  when: if_config.changed or dns_config.changed

@@ -1,0 +1,59 @@
+---
+# tasks file for nmd.bitwarden
+- name: Check if Bitwarden volume exists
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - status
+  run_once: true
+  register: volume_status
+
+- name: Ensure remote volumes directory exists
+  become: true
+  ansible.builtin.file:
+    path: /opt/nfs-volumes
+    state: directory
+  when: nomad_leader == true and not 'bitwarden' in volume_status.stdout
+  tags: nomad-bitwarden
+
+- name: Copy the bitwarden volume file to the remote machine
+  become: true
+  ansible.builtin.copy:
+    src: 'bitwarden.volume'
+    dest: /opt/nfs-volumes/
+    owner: root
+    group: root
+  run_once: true
+  when: nomad_leader == true and not 'bitwarden' in volume_status.stdout
+  tags: nomad-bitwarden
+
+- name: Deploy the bitwarden volume
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - create
+      - /opt/nfs-volumes/bitwarden.volume
+  run_once: true
+  when: nomad_leader == true and not 'bitwarden' in volume_status.stdout
+  tags: nomad-bitwarden
+
+- name: Deploy the bitwarden nomad job
+  community.general.nomad_job:
+    host: localhost
+    state: present
+    content: "{{ lookup('ansible.builtin.file', '../nomad/bitwarden.nomad') }}"
+    timeout: 120
+    use_ssl: false
+  run_once: true
+
+- name: Wait for bitwarden to come up
+  ansible.builtin.wait_for:
+    host: bitwarden.senseirat.com
+    delay: 10
+    sleep: 10
+    state: present
+    timeout: 100

@@ -1,0 +1,83 @@
+---
+# tasks file for nmd.gitea
+- name: Check what volumes exist
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - status
+  run_once: true
+  register: volume_status
+
+- name: Ensure remote volumes directory exists
+  become: true
+  ansible.builtin.file:
+    path: /opt/nfs-volumes
+    state: directory
+  when: nomad_leader == true and not 'gitea' in volume_status.stdout
+  tags: nomad-gitea
+
+- name: Copy the gitea volume file to the remote machine
+  become: true
+  ansible.builtin.copy:
+    src: 'gitea.volume'
+    dest: /opt/nfs-volumes/
+    owner: root
+    group: root
+  run_once: true
+  when: nomad_leader == true and not 'gitea' in volume_status.stdout
+  tags: nomad-gitea
+
+# WARNING!!! These files currently need to be chowned to 777 on the NFS server for gitea to work
+- name: Deploy the gitea volume
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - create
+      - /opt/nfs-volumes/gitea.volume
+  run_once: true
+  when: nomad_leader == true and not 'gitea' in volume_status.stdout
+  tags: nomad-gitea
+
+- name: Connect to postgres and set user's password with no expire date
+  community.postgresql.postgresql_user:
+    login_host: postgres.senseirat.com
+    login_user: postgres
+    login_password: postgres
+    name: gitea
+    password: gitea
+    expires: infinity
+  run_once: true
+
+- name: Create a new database with name "gitea"
+  community.postgresql.postgresql_db:
+    name: gitea
+    login_host: postgres.senseirat.com
+    login_user: postgres
+    login_password: postgres
+  run_once: true
+
+- name: Grant gitea user permissions to database
+  community.postgresql.postgresql_privs:
+    login_host: postgres.senseirat.com
+    login_user: postgres
+    login_password: postgres
+    db: gitea
+    privs: ALL
+    type: database
+    obj: gitea
+    role: gitea
+  run_once: true
+
+- name: Deploy the gitea nomad job
+  community.general.nomad_job:
+    host: localhost
+    state: present
+    content: "{{ lookup('ansible.builtin.file', '../nomad/gitea.nomad') }}"
+    timeout: 120
+    use_ssl: false
+  run_once: true
+

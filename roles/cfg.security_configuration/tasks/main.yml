@@ -1,0 +1,174 @@
+---
+# tasks file for cfg.security_configuration
+
+- name: Install latest version of all packages
+  become: true
+  ansible.builtin.apt:
+    name: "*"
+    state: latest
+    update_cache: true
+    cache_valid_time: 3600
+    autoclean: true
+    autoremove: true
+
+- name: Install sudo package
+  become: true
+  ansible.builtin.apt:
+    name: sudo
+    state: latest
+
+- name: Configure SSH
+  become: true
+  ansible.builtin.lineinfile:
+    dest: /etc/ssh/sshd_config
+    regexp: "{{ item.regex }}"
+    line: "{{ item.line }}"
+    state: "{{ item.state | default('present') }}"
+    validate: "sshd -t -f %s"
+  with_items:
+    - {regex: '^.{0,1}PermitRootLogin', line: 'PermitRootLogin no'}
+    - {regex: '^.{0,1}PasswordAuthentication', line: 'PasswordAuthentication no'}
+  register: ssh_configured
+
+- name: Restart the SSHD service
+  become: true
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded
+  when: ssh_configured is changed
+
+- name: Lock the root password
+  become: true
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+
+- name: Remove root authorized keys
+  become: true
+  ansible.builtin.file:
+    path: /root/.ssh/authorized_keys
+    state: absent
+
+- name: Install rkhunter
+  become: true
+  ansible.builtin.apt:
+    name: rkhunter
+    state: latest
+  tags:
+    - rkhunter
+
+- name: Reconfigure rkhunter mirrors file
+  become: true
+  ansible.builtin.lineinfile:
+    dest: /var/lib/rkhunter/db/mirrors.dat
+    regexp: "mirror=http://rkhunter.sourceforge.net"
+    line: "mirror=https://rkhunter.sourceforge.net"
+  tags:
+    - rkhunter
+
+- name: Configure rkhunter
+  become: true
+  ansible.builtin.lineinfile:
+    dest: /etc/rkhunter.conf
+    regexp: "{{ item.regex }}"
+    line: "{{ item.line }}"
+    state: "{{ item.state | default('present') }}"
+  with_items:
+    - {regex: '^#{0,1}APPEND_LOG=', line: 'APPEND_LOG=1'}
+    - {regex: '^#{0,1}COPY_LOG_ON_ERROR=', line: 'COPY_LOG_ON_ERROR=1'}
+    - {regex: '^#{0,1}ALLOW_SSH_ROOT_USER=', line: 'ALLOW_SSH_ROOT_USER=no'}
+    - {regex: '^#{0,1}ALLOW_SSH_PROT_V1=', line: 'ALLOW_SSH_PROT_V1=0'}
+    - {regex: '^#{0,1}PKGMGR=', line: 'PKGMGR=DPKG'}
+    - {regex: '^#{0,1}USE_LOCKING=', line: 'USE_LOCKING=1'}
+    - {regex: '^#{0,1}SHOW_SUMMARY_WARNINGS_NUMBER=', line: 'SHOW_SUMMARY_WARNINGS_NUMBER=1'}
+    - {regex: '^#{0,1}WEB_CMD=', line: 'WEB_CMD=curl'}
+    - {regex: '^#{0,1}MIRRORS_MODE=', line: 'MIRRORS_MODE=0'}
+    - {regex: '^#{0,1}ROTATE_MIRRORS=', line: 'ROTATE_MIRRORS=0'}
+  register: configure_rkhunter
+  tags:
+    - rkhunter
+
+- name: Update rkhunter's database if the configuration has changed
+  become: true
+  ansible.builtin.command: rkhunter --propupd
+  when: configure_rkhunter is changed
+  tags:
+    - rkhunter
+
+- name: Install ClamAV
+  become: true
+  ansible.builtin.apt:
+    name: clamav
+    state: latest
+  tags:
+    - clamav
+
+- name: Install lynis
+  become: true
+  ansible.builtin.apt:
+    name: lynis
+    state: latest
+  tags:
+    - lynis
+
+- name: Install AIDE
+  become: true
+  ansible.builtin.apt:
+    name: aide
+    state: latest
+  register: aide_installed
+  tags:
+    - aide
+
+- name: Initialize AIDE's database
+  become: true
+  ansible.builtin.command: aide --init --config=/etc/aide/aide.conf
+  async: 3600
+  poll: 0
+  when: aide_installed is changed
+  register: aide_init
+  tags:
+    - aide
+
+#- name: Download Linux Malware Detect
+#  ansible.builtin.unarchive:
+#    src: https://www.rfxn.com/downloads/maldetect-current.tar.gz
+#    dest: /tmp
+#    remote_src: true
+#  tags:
+#    - maldet
+
+#- name: Install Linux Malware Detect
+#  ansible.builtin.command: 
+#    cmd: bash /tmp/maldetect-*/install.sh
+#    creates: /usr/local/maldetect
+#  tags:
+#    - maldet
+
+- name: Install Tiger
+  become: true
+  ansible.builtin.apt:
+    name: tiger
+    state: latest
+  tags:
+    - tiger
+
+- name: Install chkrootkit
+  become: true
+  ansible.builtin.apt:
+    name: chkrootkit
+    state: latest
+  tags:
+    - chkrootkit
+
+# This task needs to be last or near the end
+- name: Check if AIDE's database has been initialized
+  async_status:
+    jid: "{{ aide_init.ansible_job_id }}"
+  register: job_result
+  until: job_result.finished
+  delay: 30
+  retries: 20
+  when: aide_installed is changed
+  tags:
+    - aide

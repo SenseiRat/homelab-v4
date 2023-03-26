@@ -1,0 +1,21 @@
+type = "csi"
+id = "postgres"
+name = "postgres"
+plugin_id = "nfsofficial"
+external_id = "postgres"
+
+capability {
+  access_mode = "single-node-writer"
+  attachment_mode = "file-system"
+}
+
+parameters {
+  server = "192.168.10.1"
+  share = "/mnt/homelab/"
+  mountPermissions = "0"
+}
+
+mount_options {
+  fs_type = "nfs"
+  mount_flags = [ "timeo=30", "intr", "vers=3", "_netdev", "nolock" ]
+}

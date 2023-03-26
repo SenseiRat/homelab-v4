@@ -1,0 +1,25 @@
+---
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Test connection
+      ansible.builtin.ping:
+
+- hosts: all
+  gather_facts: true
+  roles:
+    - ../roles/sft.python3
+    - ../roles/cfg.networking
+    - ../roles/cfg.manage_users
+    - ../roles/cfg.security_configuration
+
+# this fails because it attempts to connect to root instead of the ansible user account
+- hosts: all
+  gather_facts: false
+  remote_user: ansible
+  tasks:
+    - name: Reboot device after provisioning
+      become: true
+      ansible.builtin.reboot:
+      ignore_errors: true
+

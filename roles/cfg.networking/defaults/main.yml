@@ -1,0 +1,4 @@
+---
+# defaults file for cfg.networking
+host_ip_address: "{{ ansible_default_ipv4['alias'] }}"
+host_name: "{{ inventory_hostname }}"

@@ -1,0 +1,60 @@
+---
+# tasks file for sft.nomad
+
+- name: Install Nomad dependencies
+  become: true
+  ansible.builtin.apt:
+    pkg:
+      - curl
+      - gnupg
+    state: latest
+
+- name: Add Hashicorp GPG key
+  become: true
+  ansible.builtin.get_url:
+    url: https://apt.releases.hashicorp.com/gpg
+    dest: /usr/share/keyrings/hashicorp.asc
+    mode: '0644'
+    force: true
+
+- name: Add Hashicorp repository
+  become: true
+  ansible.builtin.apt_repository:
+    repo: deb [arch=arm64 signed-by=/usr/share/keyrings/hashicorp.asc] https://apt.releases.hashicorp.com bookworm main
+    filename: hashicorp
+    state: present
+    update_cache: true
+
+- name: Install Nomad
+  become: true
+  ansible.builtin.apt:
+    name: nomad
+    state: latest
+
+- name: Configure Nomad
+  become: true
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /etc/nomad.d/{{ item }}
+    owner: nomad
+    group: nomad
+    mode: '0644'
+  loop:
+    - nomad.hcl
+    - client.hcl
+    - server.hcl
+    - plugin.hcl
+
+- name: Start and enable the nomad service
+  become: true
+  ansible.builtin.service:
+    name: nomad
+    state: started
+    enabled: true
+
+- name: Install the Nomad Python module
+  become: true
+  ansible.builtin.pip:
+    name: python-nomad
+    state: present
+    extra_args: --break-system-packages

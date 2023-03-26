@@ -1,0 +1,105 @@
+---
+# tasks file for nmd.pihole
+- name: Check what volumes exist
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - status
+  run_once: true
+  register: volume_status
+
+- name: Ensure remote volumes directory exists
+  become: true
+  ansible.builtin.file:
+    path: /opt/nfs-volumes
+    state: directory
+  when: nomad_leader == true and not 'pihole' in volume_status.stdout
+  tags: nomad-pihole
+
+- name: Copy the pihole volume files to the remote machine
+  become: true
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /opt/nfs-volumes/
+    owner: root
+    group: root
+  run_once: true
+  when: nomad_leader == true and not 'pihole' in volume_status.stdout
+  loop:
+    - dnsmasq.volume
+    - pihole.volume
+  tags: nomad-pihole
+
+- name: Deploy the pihole volumes
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - create
+      - /opt/nfs-volumes/{{ item }}
+  run_once: true
+  when: nomad_leader == true and not 'pihole' in volume_status.stdout
+  loop:
+    - dnsmasq.volume
+    - pihole.volume
+  tags: nomad-pihole
+
+- name: Clear custom DNS servers if they exist
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    line: nameserver {{ item }}
+    state: absent
+  loop: "{{ homelab_dns_servers }}"
+
+- name: Set temporary DNS servers
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    line: nameserver {{ item }}
+    state: present
+  loop: "{{ temp_dns_servers }}"
+
+- name: Deploy the pihole nomad job
+  become: true
+  community.general.nomad_job:
+    host: localhost
+    state: present
+    content: "{{ lookup('ansible.builtin.file', '../nomad/pihole.nomad') }}"
+    timeout: 120
+    use_ssl: false
+  run_once: true
+
+- name: Wait for pihole webinterface to come up on a host
+  ansible.builtin.wait_for:
+    host: pihole.senseirat.com
+    delay: 10
+    sleep: 10
+    state: present
+    timeout: 100
+
+- name: Clear existing DNS servers
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    line: nameserver {{ item }}
+    state: absent
+  loop: "{{ temp_dns_servers }}"
+
+- name: Set DNS servers
+  become: true
+  ansible.builtin.lineinfile:
+    path: /etc/resolv.conf
+    line: "nameserver {{ item }}"
+  loop: "{{ homelab_dns_servers }}"
+  register: dns_config
+
+- name: Restart networking if required
+  become: true
+  ansible.builtin.service:
+    name: systemd-networkd.service
+    state: restarted
+  when: dns_config.changed

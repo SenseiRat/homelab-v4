@@ -1,0 +1,7 @@
+---
+# tasks file for sft.nfs
+- name: Install NFS
+  become: true
+  ansible.builtin.apt:
+    name: nfs-common
+    state: latest

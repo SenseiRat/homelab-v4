@@ -1,0 +1,82 @@
+---
+# tasks file for nmd.mediawiki
+- name: Check if Mediawiki volume exists
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - status
+  run_once: true
+  register: volume_status
+
+- name: Ensure remote volumes directory exists
+  become: true
+  ansible.builtin.file:
+    path: /opt/nfs-volumes
+    state: directory
+  when: nomad_leader == true and not 'mediawiki' in volume_status.stdout
+  tags: nomad-mediawiki
+
+- name: Copy the mediawiki volume file to the remote machine
+  become: true
+  ansible.builtin.copy:
+    src: 'mediawiki.volume'
+    dest: /opt/nfs-volumes/
+    owner: root
+    group: root
+  run_once: true
+  when: nomad_leader == true and not 'mediawiki' in volume_status.stdout
+  tags: nomad-mediawiki
+
+- name: Deploy the mediawiki volume
+  become: true
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/nomad
+      - volume
+      - create
+      - /opt/nfs-volumes/mediawiki.volume
+  run_once: true
+  when: nomad_leader == true and not 'mediawiki' in volume_status.stdout
+  tags: nomad-mediawiki
+
+# All of the pgsql tasks need to be changed over to mariadb tasks
+- name: Connect to postgres and set user's password with no expire date
+  community.postgresql.postgresql_user:
+    login_host: postgres.senseirat.com
+    login_user: postgres
+    login_password: postgres
+    name: mediawiki
+    password: mediawiki
+    expires: infinity
+  run_once: true
+
+- name: Create a new database with name "mediawiki"
+  community.postgresql.postgresql_db:
+    name: mediawiki
+    login_host: postgres.senseirat.com
+    login_user: postgres
+    login_password: postgres
+  run_once: true
+
+- name: Grant mediawiki user permissions to database
+  community.postgresql.postgresql_privs:
+    login_host: postgres.senseirat.com
+    login_user: postgres
+    login_password: postgres
+    db: mediawiki
+    privs: ALL
+    type: database
+    obj: mediawiki
+    role: mediawiki
+  run_once: true
+
+- name: Deploy the mediawiki nomad job
+  community.general.nomad_job:
+    host: localhost
+    state: present
+    content: "{{ lookup('ansible.builtin.file', '../nomad/mediawiki.nomad') }}"
+    timeout: 120
+    use_ssl: false
+  run_once: true

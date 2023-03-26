@@ -1,0 +1,33 @@
+---
+- hosts: servers
+  gather_facts: false
+  tasks:
+    - name: Test connection
+      ansible.builtin.ping:
+
+- hosts: servers
+  gather_facts: true
+  roles:
+    - ../roles/sft.nfs
+    - ../roles/sft.docker
+
+- hosts: consul
+  gather_facts: true
+  roles:
+    - ../roles/sft.consul
+  tags:
+    - consul
+
+- hosts: vault
+  gather_facts: true
+  roles:
+    - ../roles/sft.vault
+  tags:
+    - vault
+
+- hosts: nomad
+  gather_facts: true
+  roles:
+    - ../roles/sft.nomad
+  tags:
+    - nomad

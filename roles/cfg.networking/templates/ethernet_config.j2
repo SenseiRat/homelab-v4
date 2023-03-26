@@ -1,0 +1,8 @@
+auto {{ ansible_default_ipv4["alias"] }}
+iface {{ ansible_default_ipv4["alias"] }} inet static
+ address {{ host_ip_address }}
+ netmask {{ homelab_netmask }}
+ gateway {{ homelab_gateway }}
+ dns-domain {{ host_name }}.{{ homelab_domain }}
+ dns-nameservers {% for server in temp_dns_servers %}{{ server }} {% endfor %}
+ 
